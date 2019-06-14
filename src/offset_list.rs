@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+mod tree_utils;
 
-use std::ops::Bound::Included;
+use std::collections::BTreeMap;
+use tree_utils::Range;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -19,15 +20,29 @@ impl OffsetList {
     pub fn insert(&mut self, start: u32, end: u32, size: u32) {
         if self.offset_tree.is_empty() {
             self.offset_tree.insert(0, size);
-            return
+            return;
         }
 
-        let overlapping_ranges = ranges_within(&self.offset_tree, start - 1, end + 1);
+        let overlapping_ranges = tree_utils::ranges_within(
+            &self.offset_tree,
+            match start {
+                0 => 0,
+                other => other - 1,
+            },
+            end + 1,
+        );
+
+        // println!("Overlapping ranges! {:?}", overlapping_ranges);
 
         let mut first_pass_done: bool = false;
         let mut should_insert: bool = false;
 
-        for Range { start: range_start, end: range_end, size: range_size } in overlapping_ranges {
+        for Range {
+            start: range_start,
+            end: range_end,
+            size: range_size,
+        } in overlapping_ranges
+        {
             // previous range
             if !first_pass_done {
                 should_insert = range_size != size;
@@ -42,7 +57,8 @@ impl OffsetList {
 
             // next range
             if range_end > end && end >= range_start {
-                if range_size != size { // had an isNaN check here, we can probably use 0 for this special case
+                if range_size != size {
+                    // had an isNaN check here, we can probably use 0 for this special case
                     self.offset_tree.insert(end + 1, range_size);
                 }
             }
@@ -51,53 +67,12 @@ impl OffsetList {
         if should_insert {
             self.offset_tree.insert(start, size);
         }
-
     }
-}
-
-#[derive(Debug)]
-struct Range {
-    start: u32,
-    end: u32,
-    size: u32,
-}
-
-fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Range> {
-    let mut ranges: Vec<Range> = Vec::new();
-
-    let (start_key, _) = tree
-        .range((Included(&0), Included(&start)))
-        .last()
-        .expect("Tree should contain zero");
-
-    let mut key_vals = tree.range(start_key..&end);
-
-    let (mut start, mut size) = key_vals.next().expect("We should have at least one match!");
-
-    for (next_start, next_size) in key_vals {
-        ranges.push(Range {
-            start: *start,
-            end: next_start - 1,
-            size: *size,
-        });
-        size = next_size;
-        start = next_start;
-    }
-
-    ranges.push(Range {
-        start: *start,
-        end: std::u32::MAX,
-        size: *size,
-    });
-
-    return ranges;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ranges_within;
     use super::OffsetList;
-    use std::collections::BTreeMap;
 
     #[test]
     fn test_initial_insert() {
@@ -124,6 +99,18 @@ mod tests {
     }
 
     #[test]
+    fn re_insert_at_start() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 5);
+        list.insert(0, 0, 10);
+
+        let values: Vec<u32> = list.offset_tree.values().cloned().collect();
+        let keys: Vec<u32> = list.offset_tree.keys().cloned().collect();
+        assert_eq!(values, [10, 5]);
+        assert_eq!(keys, [0, 1]);
+    }
+
+    #[test]
     fn test_new_insert() {
         let mut list: OffsetList = OffsetList::new();
         list.insert(0, 0, 10);
@@ -136,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn test_join() {
+    fn test_join_start() {
         let mut list: OffsetList = OffsetList::new();
         list.insert(0, 0, 10);
         list.insert(3, 5, 20);
@@ -149,35 +136,43 @@ mod tests {
     }
 
     #[test]
-    fn test_ranges_within() {
-        let mut tree: BTreeMap<u32, u32> = BTreeMap::new();
-        tree.insert(0, 10);
+    fn test_join_end() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 10);
+        list.insert(5, 7, 20);
+        list.insert(3, 5, 20);
 
-        let ranges = ranges_within(&tree, 5, 20);
-
-        assert_eq!(ranges[0].size, 10);
-        assert_eq!(ranges[0].start, 0);
-        assert_eq!(ranges[0].end, std::u32::MAX);
+        let values: Vec<u32> = list.offset_tree.values().cloned().collect();
+        let keys: Vec<u32> = list.offset_tree.keys().cloned().collect();
+        assert_eq!(values, [10, 20, 10]);
+        assert_eq!(keys, [0, 3, 8]);
     }
 
     #[test]
-    fn test_ranges_within2() {
-        let mut tree: BTreeMap<u32, u32> = BTreeMap::new();
-        tree.insert(0, 10);
-        tree.insert(5, 20);
-        tree.insert(10, 8);
-        tree.insert(20, 30);
+    fn test_override() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 10);
+        list.insert(5, 7, 20);
+        list.insert(4, 7, 30);
 
-        let ranges = ranges_within(&tree, 6, 27);
+        let values: Vec<u32> = list.offset_tree.values().cloned().collect();
+        let keys: Vec<u32> = list.offset_tree.keys().cloned().collect();
+        assert_eq!(keys, [0, 4, 8]);
+        assert_eq!(values, [10, 30, 10]);
+    }
 
-        assert_eq!(ranges.len(), 3);
+    #[test]
+    fn test_join_override() {
+        let mut list: OffsetList = OffsetList::new();
 
-        assert_eq!(ranges[0].start, 5);
-        assert_eq!(ranges[1].start, 10);
-        assert_eq!(ranges[2].start, 20);
-        assert_eq!(ranges[2].end, std::u32::MAX);
+        list.insert(0, 0, 5);
+        list.insert(4, 5, 10);
+        list.insert(6, 7, 20);
+        list.insert(3, 8, 5);
 
-        let ranges2 = ranges_within(&tree, 5, 18);
-        assert_eq!(ranges2.len(), 2);
+        let values: Vec<u32> = list.offset_tree.values().cloned().collect();
+        let keys: Vec<u32> = list.offset_tree.keys().cloned().collect();
+        assert_eq!(keys, [0]);
+        assert_eq!(values, [5]);
     }
 }
