@@ -7,6 +7,14 @@ pub struct Range {
     pub size: u32,
 }
 
+impl Range {
+    fn new(start: u32, end: u32, size: u32) -> Self {
+        Range { start, end, size }
+    }
+}
+
+const LAST_RANGE_END: u32 = std::u32::MAX;
+
 pub fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Range> {
     let mut ranges: Vec<Range> = Vec::new();
 
@@ -20,20 +28,12 @@ pub fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Ran
     let (mut start, mut size) = nodes.next().expect("We should have at least one match!");
 
     for (next_start, next_size) in nodes {
-        ranges.push(Range {
-            start: *start,
-            end: next_start - 1,
-            size: *size,
-        });
+        ranges.push(Range::new(*start, next_start - 1, *size));
         size = next_size;
         start = next_start;
     }
 
-    ranges.push(Range {
-        start: *start,
-        end: std::u32::MAX,
-        size: *size,
-    });
+    ranges.push(Range::new(*start, LAST_RANGE_END, *size));
 
     return ranges;
 }
@@ -41,7 +41,16 @@ pub fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Ran
 #[cfg(test)]
 mod tests {
     use super::ranges_within;
+    use super::Range;
+    use super::LAST_RANGE_END;
+    use std::cmp::PartialEq;
     use std::collections::BTreeMap;
+
+    impl PartialEq for Range {
+        fn eq(&self, other: &Self) -> bool {
+            self.start == other.start && self.end == other.end && self.size == other.size
+        }
+    }
 
     #[test]
     fn test_ranges_within() {
@@ -50,9 +59,7 @@ mod tests {
 
         let ranges = ranges_within(&tree, 5, 20);
 
-        assert_eq!(ranges[0].size, 10);
-        assert_eq!(ranges[0].start, 0);
-        assert_eq!(ranges[0].end, std::u32::MAX);
+        assert_eq!(ranges[..], [Range::new(0, LAST_RANGE_END, 10)]);
     }
 
     #[test]
@@ -65,14 +72,13 @@ mod tests {
 
         let ranges = ranges_within(&tree, 6, 27);
 
-        assert_eq!(ranges.len(), 3);
-
-        assert_eq!(ranges[0].start, 5);
-        assert_eq!(ranges[1].start, 10);
-        assert_eq!(ranges[2].start, 20);
-        assert_eq!(ranges[2].end, std::u32::MAX);
-
-        let ranges2 = ranges_within(&tree, 5, 18);
-        assert_eq!(ranges2.len(), 2);
+        assert_eq!(
+            ranges[..],
+            [
+                Range::new(5, 9, 20),
+                Range::new(10, 19, 8),
+                Range::new(20, LAST_RANGE_END, 30),
+            ]
+        )
     }
 }
