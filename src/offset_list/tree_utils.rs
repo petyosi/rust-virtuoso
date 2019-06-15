@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ops::Bound::Included;
 
 #[derive(Debug)]
 pub struct Range {
@@ -11,16 +10,16 @@ pub struct Range {
 pub fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Range> {
     let mut ranges: Vec<Range> = Vec::new();
 
-    let (start_key, _) = tree
-        .range((Included(&0), Included(&start)))
+    let (closest_lte, _) = tree
+        .range(..=start)
         .last()
         .expect("Tree should contain zero");
 
-    let mut key_vals = tree.range((Included(start_key), Included(&end)));
+    let mut nodes = tree.range(closest_lte..=&end);
 
-    let (mut start, mut size) = key_vals.next().expect("We should have at least one match!");
+    let (mut start, mut size) = nodes.next().expect("We should have at least one match!");
 
-    for (next_start, next_size) in key_vals {
+    for (next_start, next_size) in nodes {
         ranges.push(Range {
             start: *start,
             end: next_start - 1,
