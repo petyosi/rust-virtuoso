@@ -13,7 +13,7 @@ impl Range {
     }
 }
 
-const LAST_RANGE_END: u32 = std::u32::MAX;
+pub const LAST_RANGE_END: u32 = std::u32::MAX;
 
 pub fn lte(tree: &BTreeMap<u32, u32>, start: u32) -> (&u32, &u32) {
     tree.range(..=start)

@@ -1,13 +1,22 @@
 mod tree_utils;
 
+use std::cmp;
 use std::collections::BTreeMap;
 use tree_utils::Range;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+pub struct Item {
+    size: u32,
+    offset: u32,
+    index: u32,
+}
+
+#[wasm_bindgen]
 pub struct OffsetList {
     size_tree: BTreeMap<u32, u32>,
     offset_tree: BTreeMap<u32, u32>,
+    pixel_tree: BTreeMap<u32, u32>,
 }
 
 #[wasm_bindgen]
@@ -16,6 +25,7 @@ impl OffsetList {
         OffsetList {
             size_tree: BTreeMap::new(),
             offset_tree: BTreeMap::new(),
+            pixel_tree: BTreeMap::new(),
         }
     }
 
@@ -39,6 +49,7 @@ impl OffsetList {
         for (index, size) in updated {
             let offset = (index - prev_index) * prev_size + prev_offset;
             self.offset_tree.insert(*index, offset);
+            self.pixel_tree.insert(offset, *index);
             prev_index = index;
             prev_offset = offset;
             prev_size = size;
@@ -47,7 +58,12 @@ impl OffsetList {
 
     pub fn remove_index(&mut self, index: &u32) {
         self.size_tree.remove(index);
-        self.offset_tree.remove(index);
+        let pixel = self
+            .offset_tree
+            .remove(index)
+            .expect("offset tree should be in sync!");
+
+        self.pixel_tree.remove(&pixel);
     }
 
     pub fn insert_spots(&mut self, spots: Vec<u32>, size: u32) {
@@ -142,6 +158,120 @@ impl OffsetList {
     }
 
     pub fn offset_of(self, index: u32) -> u32 {
+        let (size, offset, range_index) = self.range_size_and_offset(index);
+
+        return (index - range_index) * size + offset;
+    }
+
+    pub fn total(self, index: u32) -> u32 {
+        let (size, offset, range_index) = self.range_size_and_offset(index);
+
+        return (index - range_index + 1) * size + offset;
+    }
+
+    pub fn item_at(self, index: u32) -> Item {
+        let (size, offset, range_index) = self.range_size_and_offset(index);
+        return Item {
+            index: index,
+            size: *size,
+            offset: (index - range_index) * size + offset,
+        };
+    }
+
+    pub fn index_range(&self, start_index: u32, end_index: u32) -> Vec<Item> {
+        if self.size_tree.is_empty() {
+            return vec![Item {
+                index: 0,
+                size: 0,
+                offset: 0,
+            }];
+        }
+
+        let ranges = tree_utils::ranges_within(&self.size_tree, start_index, end_index);
+        let mut result: Vec<Item> = Vec::new();
+
+        for range in ranges {
+            let start = std::cmp::max(start_index, range.start);
+            let end = std::cmp::min(range.end, end_index);
+
+            for index in start..=end {
+                result.push(Item {
+                    index,
+                    size: range.size,
+                    offset: 0,
+                })
+            }
+        }
+
+        return result;
+    }
+
+    pub fn range(
+        &self,
+        start_offset: u32,
+        end_offset: u32,
+        min_index: u32,
+        max_index: u32,
+    ) -> Vec<Item> {
+        let (_, start_index) = tree_utils::lte(&self.pixel_tree, start_offset);
+
+        let (_, end_index) = self
+            .pixel_tree
+            .range(end_offset..)
+            .next()
+            .expect("we should find such end index");
+
+        let mut result: Vec<Item> = Vec::new();
+
+        for range in tree_utils::ranges_within(&self.offset_tree, *start_index, *end_index) {
+            let mut offset = range.size;
+            let mut start_index = range.start;
+            let size = self
+                .size_tree
+                .get(&start_index)
+                .expect("tree should be in sync");
+
+            if range.size < start_offset {
+                start_index += (start_offset - range.size) as u32 / size;
+                offset += (start_index - range.start) * size;
+            }
+
+            if start_index < min_index {
+                offset += (min_index - start_index) * size;
+                start_index = min_index;
+            }
+
+            if size == &0u32 {
+                result.push(Item {
+                    index: start_index,
+                    size: 0,
+                    offset,
+                });
+
+                return result;
+            }
+
+            let end_index = cmp::min(range.end, max_index);
+
+            for index in start_index..=end_index {
+                if offset > end_offset {
+                    break;
+                }
+
+                result.push(Item {
+                    index: index,
+                    size: *size,
+                    offset: offset,
+                });
+
+                offset += size;
+            }
+        }
+
+        return result;
+    }
+
+    fn range_size_and_offset(&self, index: u32) -> (&u32, &u32, &u32) {
         let (range_index, _) = tree_utils::lte(&self.size_tree, index);
         let size = self
             .size_tree
@@ -151,14 +281,15 @@ impl OffsetList {
             .offset_tree
             .get(range_index)
             .expect("offset tree should mirror the size tree");
-        return (index - range_index) * size + offset;
+
+        return (&size, &offset, &range_index);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Item;
     use super::OffsetList;
-
     #[test]
     fn test_initial_offset_insert() {
         let mut list: OffsetList = OffsetList::new();
@@ -347,5 +478,74 @@ mod tests {
         list.insert(2, 4, 2);
 
         assert_eq!(list.offset_of(7), 10);
+    }
+
+    #[test]
+    fn test_total() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 1);
+        list.insert(2, 4, 2);
+
+        assert_eq!(list.total(7), 11);
+    }
+
+    #[test]
+    fn test_item_at() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 1);
+        list.insert(2, 4, 2);
+
+        let item = list.item_at(10);
+        assert_eq!(item.size, 1);
+        assert_eq!(item.offset, 13);
+        assert_eq!(item.index, 10);
+    }
+
+    #[test]
+    fn test_index_range() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 1);
+        list.insert(2, 4, 2);
+
+        let items: Vec<Item> = list.index_range(3, 6);
+        assert_eq!(items.len(), 4);
+
+        let item = items.get(0).expect("Item 0 is here");
+        assert_eq!(item.index, 3);
+        assert_eq!(item.size, 2);
+
+        let item = items.get(3).expect("Item 0 is here");
+        assert_eq!(item.index, 6);
+        assert_eq!(item.size, 1);
+    }
+
+    #[test]
+    fn test_range() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 10);
+        list.insert(2, 4, 20);
+
+        let items: Vec<Item> = list.range(13, 79, 0, std::u32::MAX);
+        assert_eq!(items.len(), 4);
+
+        let item = items.get(0).expect("Item is here");
+        assert_eq!(item.index, 1);
+        assert_eq!(item.size, 10);
+        assert_eq!(item.offset, 10);
+
+        let item = items.get(1).expect("Item is here");
+        assert_eq!(item.index, 2);
+        assert_eq!(item.size, 20);
+        assert_eq!(item.offset, 20);
+
+        let item = items.get(2).expect("Item is here");
+        assert_eq!(item.index, 3);
+        assert_eq!(item.size, 20);
+        assert_eq!(item.offset, 40);
+
+        let item = items.get(3).expect("Item is here");
+        assert_eq!(item.index, 4);
+        assert_eq!(item.size, 20);
+        assert_eq!(item.offset, 60);
     }
 }
