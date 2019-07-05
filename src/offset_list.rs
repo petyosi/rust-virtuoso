@@ -70,6 +70,29 @@ impl OffsetList {
             return;
         }
 
+        if let Some(0) = self.size_tree.get(&start) {
+            let group_size = self
+                .size_tree
+                .get(&(start - 1))
+                .expect("We must have a group size if zero sized element is present");
+
+            if *group_size == size {
+                self.size_tree = BTreeMap::new();
+                self.size_tree.insert(0, size);
+                self.offset_tree = BTreeMap::new();
+                self.offset_tree.insert(0, 0);
+                return;
+            } else {
+                for (_key, value) in self.size_tree.iter_mut() {
+                    if value == &0 {
+                        *value = size;
+                    }
+                }
+                self.update_offset_tree(start);
+                return;
+            }
+        }
+
         let overlapping_ranges = tree_utils::ranges_within(
             &self.size_tree,
             match start {
@@ -116,6 +139,19 @@ impl OffsetList {
         }
 
         self.update_offset_tree(start);
+    }
+
+    pub fn offset_of(self, index: u32) -> u32 {
+        let (range_index, _) = tree_utils::lte(&self.size_tree, index);
+        let size = self
+            .size_tree
+            .get(range_index)
+            .expect("size tree should include the found index");
+        let offset = self
+            .offset_tree
+            .get(range_index)
+            .expect("offset tree should mirror the size tree");
+        return (index - range_index) * size + offset;
     }
 }
 
@@ -289,5 +325,27 @@ mod tests {
         let keys: Vec<u32> = list.offset_tree.keys().cloned().collect();
         assert_eq!(keys, [0, 1, 10, 11, 20, 21]);
         assert_eq!(values, [0, 5, 5, 10, 10, 15]);
+    }
+
+    #[test]
+    fn test_insert_size_after_spot() {
+        let mut list: OffsetList = OffsetList::new();
+
+        list.insert_spots(vec![0, 10, 20], 5);
+        list.insert(1, 5, 10);
+
+        let values: Vec<u32> = list.size_tree.values().cloned().collect();
+        let keys: Vec<u32> = list.size_tree.keys().cloned().collect();
+        assert_eq!(keys, [0, 1, 10, 11, 20, 21]);
+        assert_eq!(values, [5, 10, 5, 10, 5, 10]);
+    }
+
+    #[test]
+    fn test_offset_of() {
+        let mut list: OffsetList = OffsetList::new();
+        list.insert(0, 0, 1);
+        list.insert(2, 4, 2);
+
+        assert_eq!(list.offset_of(7), 10);
     }
 }
