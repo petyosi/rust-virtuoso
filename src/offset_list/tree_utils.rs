@@ -15,13 +15,16 @@ impl Range {
 
 const LAST_RANGE_END: u32 = std::u32::MAX;
 
+pub fn lte(tree: &BTreeMap<u32, u32>, start: u32) -> (&u32, &u32) {
+    tree.range(..=start)
+        .last()
+        .expect("Tree should contain zero")
+}
+
 pub fn ranges_within(tree: &BTreeMap<u32, u32>, start: u32, end: u32) -> Vec<Range> {
     let mut ranges: Vec<Range> = Vec::new();
 
-    let (closest_lte, _) = tree
-        .range(..=start)
-        .last()
-        .expect("Tree should contain zero");
+    let (closest_lte, _) = lte(tree, start);
 
     let mut nodes = tree.range(closest_lte..=&end);
 
